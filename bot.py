@@ -793,7 +793,6 @@ def main() -> int:
     )
     bot = TelegramBot(cfg.token, repo)
     bot.run(timeout=cfg.poll_timeout)
-    return 0
 
 
 if __name__ == "__main__":
