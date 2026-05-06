@@ -100,10 +100,10 @@ def is_admin(user_id: int) -> bool:
 class DailyRefreshScheduler:
     """Запускает обновление кеша каждый день в 21:20 МСК."""
 
-    def __init__(self, schedule_repository: ScheduleRepository) -> None:
+    def  __init__ ( self, schedule_repository: ScheduleRepository ) -> None :
         self.schedule_repository = schedule_repository
-        self.stop_event = Event()
-        self.thread = Thread(
+        self.stop_event = Event ( )​
+        self.thread = Thread (​
             target=self.run_forever,
             name="daily-refresh-scheduler",
             daemon=True,
@@ -692,7 +692,8 @@ class TelegramBot:
         ]
 
         days = schedule.get("days", [])
-        if selected_labels is not None:
+if selected_labels is not None:
+    days = [d for d in days if str(d.get("label", "")) in selected_labels]
 
     return 0
 
