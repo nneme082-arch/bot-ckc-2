@@ -491,4 +491,213 @@ class TelegramBot:
             elif command == "/mygroup":
                 reply = self.handle_my_group(chat_id)
             elif command == "/setgroup":
-  
+                args = self.extract_argument(normalized)
+                if not args:
+                    self.set_awaiting_group(chat_id, True)
+                    reply = "Введите название группы, например П‑21."
+                else:
+                    reply = self.select_group(chat_id, args)
+            elif command == "/groups":
+                reply = self.handle_groups()
+            elif command == "/find":
+                args = self.extract_argument(normalized)
+                if not args:
+                    reply = "Укажите часть названия группы. Пример: /find П‑2"
+                else:
+                    reply = self.handle_find(args)
+            elif command == "/schedule":
+                args = self.extract_argument(normalized)
+                if args:
+                    reply = self.handle_schedule(args, chat_id=chat_id, save_selection=True)
+                else:
+                    reply = self.handle_saved_group_schedule(chat_id)
+            elif command == "/refresh":
+                reply = self.handle_refresh()
+            elif command == "/status":
+                reply = self.handle_status()
+            # --------------------- Кнопки (внутри текста) ----------------
+            elif normalized == SCHEDULE_BUTTON_TEXT:
+                if self.user_state_store.get(chat_id)["selected_group"]:
+                    reply = self.handle_saved_group_schedule(chat_id)
+                else:
+                    self.set_awaiting_group(chat_id, True)
+                    reply = "Введите название группы, например П‑21."
+            elif normalized in {TODAY_BUTTON_TEXT, TOMORROW_BUTTON_TEXT, WEEK_BUTTON_TEXT}:
+                reply = self.handle_saved_group_schedule(chat_id)
+            elif normalized == MY_GROUP_BUTTON_TEXT:
+                reply = self.handle_my_group(chat_id)
+            elif normalized == GROUPS_BUTTON_TEXT:
+                reply = self.handle_groups()
+            elif normalized in {SET_GROUP_BUTTON_TEXT, CHANGE_GROUP_BUTTON_TEXT}:
+                self.set_awaiting_group(chat_id, True)
+                reply = "Введите название группы, например П‑21."
+            elif self.user_state_store.get(chat_id)["awaiting_group"]:
+                reply = self.select_group(chat_id, normalized)
+            else:
+                # Если пользователь просто пишет название группы (или любой текст)
+                reply = self.handle_schedule(
+                    normalized, chat_id=chat_id, save_selection=True
+                )
+        except LookupError as exc:
+            reply = str(exc)
+        except Exception as exc:
+            reply = f"❌ Не удалось выполнить запрос: {exc}"
+
+        self.send_text_blocks(chat_id, reply)
+
+    # ------------------------------------------------------------------
+    # 111% реализации команд (перенесены из оригинального кода)
+    # ------------------------------------------------------------------
+    def extract_argument(self, text: str) -> str:
+        parts = text.split(maxsplit=1)
+        return parts[1].strip() if len(parts) > 1 else ""
+
+    def cmd_start(self, message: Dict[str, Any]) -> str:
+        from_user = message.get("from", {})
+        first_name = from_user.get("first_name", "")
+        name_part = f", {first_name}" if first_name else ""
+        if self.user_state_store.get(message["chat"]["id"])["selected_group"]:
+            return f"Привет{name_part}! Текущая группа: {self.get_selected_group(message['chat']['id'])}."
+        self.set_awaiting_group(message["chat"]["id"], True)
+        return (
+            f"Привет{name_part}! Я показываю расписание групп RMK.\n"
+            "Сначала выберите группу – просто отправьте её название, например: П‑21"
+        )
+
+    def cmd_help(self) -> str:
+        return """
+📖 **Помощь**
+
+/schedule — показать всё расписание выбранной группы
+/setgroup П‑21 — выбрать группу
+/mygroup — показать текущую группу
+/groups — список всех групп
+/find П‑2 — поиск по частичному названию
+/refresh — обновить весь кеш
+/status — состояние кеша
+/stats — статистика по предметам (только для админа)
+/addsubject CODE HOURS — добавить/изменить предмет (только для админа)
+/listsubjects — список предметов (только для админа)
+/resetsubjects — удалить все предметы (только для админа)
+/help — эта справка
+"""
+
+    # --------------------------------------------------------------
+    # НИЖЕ – почти без изменений (ас‑исходный код из вашего репозитория)
+    # --------------------------------------------------------------
+    def handle_groups(self) -> str:
+        groups = self.schedule_repository.get_groups()
+        grouped: Dict[str, List[str]] = {}
+        for group in groups:
+            grouped.setdefault(group.course, []).append(group.name)
+
+        lines = [f"Групп найдено: {len(groups)}", ""]
+        for course in sorted(grouped):
+            lines.append(f"{course}:")
+            lines.append(", ".join(sorted(grouped[course])))
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    def handle_find(self, query: str) -> str:
+        matches = self.schedule_repository.find_groups(query)
+        if not matches:
+            return f"По запросу «{query}» ничего не найдено."
+        lines = [f"Найдено групп: {len(matches)}", ""]
+        for g in matches[:50]:
+            lines.append(f"{g.name} ({g.course}, id {g.group_id})")
+        if len(matches) > 50:
+            lines.append("\nПоказаны первые 50 результатов.")
+        return "\n".join(lines)
+
+    def handle_my_group(self, chat_id: int) -> str:
+        sel = self.get_selected_group(chat_id)
+        if not sel:
+            self.set_awaiting_group(chat_id, True)
+            return "Группа ещё не выбрана. Нажмите «Выбрать группу» и введите её название."
+        return f"Текущая группа: {sel}"
+
+    def handle_schedule(
+        self,
+        query: str,
+        chat_id: Optional[int] = None,
+        save_selection: bool = False,
+    ) -> str:
+        schedule = self.schedule_repository.get_schedule_for_group(query)
+        if chat_id is not None and save_selection:
+            self.set_selected_group(chat_id, str(schedule.get("group_name", query)))
+        return self.format_schedule(schedule)
+
+    def handle_saved_group_schedule(self, chat_id: int) -> str:
+        schedule = self.get_saved_schedule(chat_id)
+        return self.format_schedule(schedule)
+
+    def handle_refresh(self) -> str:
+        snapshot = self.schedule_repository.refresh_all_schedules(force_catalog_refresh=True)
+        groups_cnt = len(snapshot.get("groups", []))
+        errors = snapshot.get("errors", [])
+        lines = [
+            "✅ Обновление завершено.",
+            f"Групп в кеше: {groups_cnt}",
+            f"Ошибок: {len(errors)}",
+            f"Время обновления: {snapshot.get('fetched_at', '—')}",
+        ]
+        if errors:
+            lines.append("")
+            lines.append("Первые ошибки:")
+            lines.extend(errors[:10])
+        return "\n".join(lines)
+
+    def handle_status(self) -> str:
+        catalog = self.schedule_repository.load_json(self.schedule_repository.catalog_path)
+        snapshot = self.schedule_repository.load_snapshot()
+        lines = []
+        if catalog:
+            lines.append(
+                f"Каталог групп: {len(catalog.get('groups', []))} | обновлён {catalog.get('fetched_at', '—')}"
+            )
+        else:
+            lines.append("Каталог групп: ещё не загружен")
+        if snapshot:
+            lines.append(
+                f"Кеш расписания: {len(snapshot.get('groups', []))} | обновлён {snapshot.get('fetched_at', '—')}"
+            )
+            if snapshot.get("errors"):
+                lines.append(f"Ошибок последнего обновления: {len(snapshot['errors'])}")
+        else:
+            lines.append("Кеш расписания: ещё не создан")
+        lines.extend(
+            [
+                "",
+                "Автообновление кеша: каждый день в 21:20 по МСК.",
+                "",
+                "Важно: страница watchstudent.php сейчас отдает только ближайшие дни.",
+            ]
+        )
+        return "\n".join(lines)
+
+    def format_schedule(self, schedule: Dict[str, Any]) -> str:
+        return self.format_schedule_filtered(schedule, selected_labels=None, header_override=None)
+
+    def format_schedule_filtered(
+        self,
+        schedule: Dict[str, Any],
+        selected_labels: Optional[set] = None,
+        header_override: Optional[str] = None,
+    ) -> str:
+        lines = [
+            header_override
+            or f"{schedule.get('group_name', 'Группа')} ({schedule.get('course', 'курс не указан')})",
+            f"Обновлено: {schedule.get('fetched_at', '—')}",
+            "",
+        ]
+
+        days = schedule.get("days", [])
+        if selected_labels is not None:
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
